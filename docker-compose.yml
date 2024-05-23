@@ -1,0 +1,125 @@
+version: "3.8"
+
+services:
+  kafka:
+    platform: linux/arm64
+    container_name: kafka
+    image: bitnami/kafka:latest
+    ports:
+      - 9094:9094
+    networks:
+      - forecast-network
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck: # Add your chosen method below
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics.sh --delete --if-exists --bootstrap-server localhost:9092 --topic healthcheck && kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic healthcheck || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-ui:
+    platform: linux/arm64
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - ${KAFKA_UI_PORT}:8080
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: PLAINTEXT://kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks:
+      - forecast-network
+
+  # mockup api data producer
+  data-producer:
+    platform: linux/arm64
+    container_name: data-producer
+    image: ariya23156/sfmlops-data-producer:latest
+    build:
+      context: ./services/data-producer
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVER=kafka:9092
+      - DB_CONNECTION_URL=postgresql://spark_user:admin1234@postgres:${POSTGRES_PORT}/spark_pg_db
+    networks:
+      - forecast-network
+    volumes:
+      - ./services/data-producer/datasets/:/service/datasets/ㄴ
+    depends_on:
+      kafka:
+        condition: service_healthy
+    # note: without executable cmd format like this, chaining multiple commands won't work
+    command:
+      [
+        "bash",
+        "-c",
+        "python scripts/put_data_in_postgres.py && python scripts/kafka_producer.py",
+      ]
+  # sql database
+  postgres:
+    platform: linux/arm64
+    container_name: postgres-server
+    image: postgres:15.3
+    # restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    networks:
+      - forecast-network
+    volumes:
+      - ./services/postgres/docker_postgres_init.sql:/docker-entrypoint-initdb.d/docker_postgres_init.sql
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ui for database
+  pgadmin:
+    platform: linux/arm64
+    image: dpage/pgadmin4
+    # restart: always
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=pgadmin@gmail.com
+      - PGADMIN_DEFAULT_PASSWORD=admin1234
+    networks:
+      - forecast-network
+    ports:
+      - "16543:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  forecast-network:
+    driver: "bridge"
+  backend-network:
+    driver: "bridge"
+
+volumes:
+  mlflow-data:
+  pgdata:
+  pgadmin-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
