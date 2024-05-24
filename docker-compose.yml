@@ -48,7 +48,7 @@ services:
   data-producer:
     platform: linux/arm64
     container_name: data-producer
-    image: ariya23156/sfmlops-data-producer:latest
+    # image: services/sfmlops-data-producer:latest
     build:
       context: ./services/data-producer
       dockerfile: Dockerfile
@@ -109,6 +109,100 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # ML platform / experiment tracking
+  mlflow:
+    platform: linux/arm64
+    container_name: mlflow-server
+    image: ariya23156/sfmlops-mlflow:latest
+    # restart: always
+    build:
+      context: ./services/mlflow
+      dockerfile: Dockerfile
+      args:
+        MLFLOW_PORT: ${MLFLOW_PORT}
+    env_file:
+      - .env
+    environment:
+      - BACKEND_STORE_URI=postgresql://mlflow_user:SuperSecurePwdHere@postgres:${POSTGRES_PORT}/mlflow_pg_db
+    networks:
+      - forecast-network
+    ports:
+      - "${MLFLOW_PORT}:${MLFLOW_PORT}"
+    volumes:
+      # note: this path must be mounted/accessible for all mlflow server and clients
+      - mlflow-data:${MLFLOW_ARTIFACT_ROOT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # overall monitoring & dashboards
+  grafana:
+    platform: linux/arm64
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - backend-network
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - ./services/grafana/grafana_datasources.yml:/etc/grafana/provisioning/datasources/grafana_datasources.yml:ro
+      - ./services/grafana/grafana_dashboards.yml:/etc/grafana/provisioning/dashboards/grafana_dashboards.yml:ro
+      - ./services/grafana/dashboards:/opt/grafana/dashboards
+      - ./services/grafana/grafana.ini:/etc/grafana/grafana.ini
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # time-series database
+  prometheus:
+    platform: linux/arm64
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - backend-network
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./services/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    command: "--config.file=/etc/prometheus/prometheus.yaml"
+
+  # host machine's metrics exporter for prometheus
+  node-exporter:
+    platform: linux/arm64
+    image: quay.io/prometheus/node-exporter:v1.5.0
+    container_name: node-exporter
+    restart: unless-stopped
+    pid: host
+    networks:
+      - backend-network
+    volumes:
+      - /:/host:ro,rslave
+    command: "--path.rootfs=/host"
+
+  # cadvisor
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    container_name: cadvisor
+    restart: unless-stopped
+    networks:
+      - backend-network
+    ports:
+      - "${CADVISOR_PORT}:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      # this line is needed to make it work on Mac M1
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    devices:
+      - /dev/kmsg
+    privileged: true
 
 networks:
   forecast-network:
