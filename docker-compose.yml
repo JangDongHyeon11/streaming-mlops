@@ -71,6 +71,65 @@ services:
         "-c",
         "python scripts/put_data_in_postgres.py && python scripts/kafka_producer.py",
       ]
+
+  # service for triggering training/retraining
+  training-service:
+    platform: linux/arm64
+    container_name: training-service
+    build:
+      context: ./services/training-service
+      dockerfile: Dockerfile
+      args:
+        TRAINING_SERVICE_PORT: ${TRAINING_SERVICE_PORT}
+    env_file:
+      - .env
+    environment:
+      - RAY_DASHBOARD_HOST=ray
+      - RAY_DASHBOARD_PORT=8265
+    networks:
+      - forecast-network
+    depends_on:
+      ray:
+        condition: service_healthy
+    volumes:
+      - ./services/training-service/app/:/service/app/
+
+  ray:
+    platform: linux/arm64
+    container_name: ray-head
+    image: ariya23156/sfmlops-ray:latest-arm64
+    build:
+      context: ./services/ray
+      dockerfile: Dockerfile
+      args:
+        MLFLOW_ARTIFACT_ROOT: ${MLFLOW_ARTIFACT_ROOT}
+        # for amd64 (x86_64) please leave ARCH_TRAILING_IMG_NAME empty
+        ARCH_TRAILING_IMG_NAME: "-aarch64"
+    shm_size: "2gb"
+    # NOTE: if you change RAY_METRICS_EXPORT_PORT in .env,
+    # you need to change the port in prometheus.yaml too
+    env_file:
+      - .env
+    environment:
+      - RAY_GRAFANA_HOST=http://grafana:3000
+      - RAY_PROMETHEUS_HOST=http://prometheus:9090
+      - RAY_PROMETHEUS_NAME=Prometheus
+      - RAY_GRAFANA_IFRAME_HOST=http://localhost:${GRAFANA_PORT}
+      - MLFLOW_TRACKING_URI=http://mlflow:5050
+      - DB_CONNECTION_URL=postgresql://spark_user:SuperSecurePwdHere@postgres:${POSTGRES_PORT}/spark_pg_db
+    networks:
+      - forecast-network
+      - backend-network
+    ports:
+      - ${RAY_DASHBOARD_PORT}:${RAY_DASHBOARD_PORT}
+    healthcheck:
+      test: ["CMD-SHELL", "ray status"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - mlflow-data:${MLFLOW_ARTIFACT_ROOT}
+
   # sql database
   postgres:
     platform: linux/arm64
