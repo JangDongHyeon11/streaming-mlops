@@ -71,7 +71,23 @@ services:
         "-c",
         "python scripts/put_data_in_postgres.py && python scripts/kafka_producer.py",
       ]
-
+  # sales forecasst service
+  forecast-service:
+    platform: linux/arm64
+    container_name: forecast-service
+    build:
+      context: ./services/forecast-service
+      dockerfile: Dockerfile
+      args:
+        FORECAST_SERVICE_PORT: ${FORECAST_SERVICE_PORT}
+    env_file:
+      - .env
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
+    networks:
+      - forecast-network
+    volumes:
+      - mlflow-data:${MLFLOW_ARTIFACT_ROOT}
   # service for triggering training/retraining
   training-service:
     platform: linux/arm64
